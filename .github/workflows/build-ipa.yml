@@ -1,0 +1,68 @@
+name: Build Unsigned IPA
+
+# 推送或手动触发，云端无签名构建 JevJarvis 并产出 IPA
+# 产物：① Actions Artifact ② 自动附加到 Release "unsigned-latest"（手机可直接打开下载）
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          XCODE_APP=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "Using: $XCODE_APP"
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+
+      - name: Build unsigned archive
+        run: |
+          xcodebuild archive \
+            -project JevJarvis.xcodeproj \
+            -scheme JevJarvis \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/JevJarvis.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            clean archive
+
+      - name: Package IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$RUNNER_TEMP/JevJarvis.xcarchive/Products/Applications/JevJarvis.app" "$RUNNER_TEMP/Payload/"
+          echo "== embedded extensions =="
+          ls "$RUNNER_TEMP/Payload/JevJarvis.app/PlugIns" 2>/dev/null || echo "(none)"
+          cd "$RUNNER_TEMP"
+          zip -qry JevJarvis-unsigned.ipa Payload
+          shasum -a 256 JevJarvis-unsigned.ipa
+          mv JevJarvis-unsigned.ipa "$GITHUB_WORKSPACE/"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JevJarvis-unsigned-ipa
+          path: JevJarvis-unsigned.ipa
+
+      - name: Attach IPA to release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: unsigned-latest
+          name: "JevJarvis Unsigned IPA (latest)"
+          artifacts: JevJarvis-unsigned.ipa
+          allowUpdates: true
+          removeArtifacts: true
+          body: |
+            未签名 IPA，供手机端签名工具（爱思助手 / ESign / AltStore 等）使用。
+            构建 Commit: ${{ github.sha }}
